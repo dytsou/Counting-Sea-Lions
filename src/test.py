@@ -3,7 +3,7 @@ import csv
 import glob
 import tqdm
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from ultralytics import YOLO
 import torch
 import pandas as pd
@@ -17,9 +17,11 @@ def get_test_image_names(folder_path="SrcData/Test", verbose=False):
     jpg_files = glob.glob(os.path.join(folder_path, "*.jpg"))
 
     image_names = [os.path.basename(f) for f in jpg_files]
-    sorted_image_names = sorted(image_names, key=lambda x: int(x.split(".")[0]))
+    sorted_image_names = sorted(
+        image_names, key=lambda x: int(x.split(".")[0]))
     if verbose:
-        print(f"Found {len(sorted_image_names)} test images in '{folder_path}'.")
+        print(
+            f"Found {len(sorted_image_names)} test images in '{folder_path}'.")
     return sorted_image_names
 
 
@@ -64,16 +66,21 @@ def divide_into_patches(image_name, image, patch_size, final_patch_size, verbose
 
 
 def test(
-    test_image_folder="SrcData/Test",
+    test_image_folder="data/Test",
     patch_size=640,
     final_patch_size=640,
     verbose=True,
     CONFIDENCE_THRESHOLD=0.5,
     NMS_IOU_THRESHOLD=0.7,
     border_margin=5,
-    model_path="model_ckpt/epoch47.pt",
+    model_path="model_ckpt/epoch99.pt",
     output_dir="test_result",
     submission_filename="submission.csv",
+    visualize=False,
+    vis_output_dir="visualizations",
+    save_patches=True,
+    save_full_image=True,
+    draw_confidence=True,
 ):
     sea_lion_class_name_map = {
         0: "adult_males",
@@ -82,6 +89,16 @@ def test(
         3: "juveniles",
         4: "pups",
     }
+
+    # Color map for different classes
+    class_colors = {
+        0: (255, 0, 0),    # Red - adult_males
+        1: (0, 255, 0),    # Green - subadult_males
+        2: (0, 0, 255),    # Blue - adult_females
+        3: (255, 255, 0),  # Yellow - juveniles
+        4: (255, 0, 255),  # Magenta - pups
+    }
+
     csv_column_order = [
         "test_id",
         "adult_males",
@@ -118,12 +135,33 @@ def test(
         os.makedirs(output_dir)
         if verbose:
             print(f"Created output directory: {output_dir}")
+
+    # Create visualization directories if needed
+    if visualize:
+        if save_patches and not os.path.exists(os.path.join(vis_output_dir, "patches")):
+            os.makedirs(os.path.join(vis_output_dir, "patches"))
+        if save_full_image and not os.path.exists(os.path.join(vis_output_dir, "full_images")):
+            os.makedirs(os.path.join(vis_output_dir, "full_images"))
+        if verbose:
+            print(f"Created visualization directory: {vis_output_dir}")
+
+    # Try to load a font for text rendering
+    try:
+        font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+    except (OSError, IOError):
+        try:
+            font = ImageFont.truetype("arial.ttf", 12)
+        except (OSError, IOError):
+            font = ImageFont.load_default()
+
     with open(output_csv_file, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(csv_column_order)
 
     image_names_list = get_test_image_names(test_image_folder, verbose=verbose)
-    bar = tqdm.tqdm(image_names_list, ncols=120) if not verbose else image_names_list
+    bar = tqdm.tqdm(image_names_list,
+                    ncols=120) if not verbose else image_names_list
     for image_name in bar:
         image_id_str = os.path.splitext(image_name)[0]
         try:
@@ -147,6 +185,14 @@ def test(
             "juveniles": 0,
             "pups": 0,
         }
+
+        # For full image visualization
+        if visualize and save_full_image:
+            vis_full_img = resized_img.copy()
+            draw_full = ImageDraw.Draw(vis_full_img)
+
+        patches_per_row = resized_img.size[0] // patch_size
+
         for patch_idx, patch_img in enumerate(image_patches):
             results = model.predict(
                 source=patch_img,
@@ -155,37 +201,99 @@ def test(
                 iou=NMS_IOU_THRESHOLD,
                 verbose=False,
             )
+
+            # Create visualization copy of patch if needed
+            if visualize and save_patches and results and len(results) > 0 and results[0].boxes is not None:
+                vis_patch = patch_img.copy()
+                draw_patch = ImageDraw.Draw(vis_patch)
+
             if results and len(results) > 0:
                 pred_boxes = results[0].boxes
-                for box in pred_boxes:
-                    cls_idx = int(box.cls.item())
-                    if cls_idx in sea_lion_class_name_map:
-                        class_name = sea_lion_class_name_map[cls_idx]
-                        coords = box.xyxy[0].tolist()
-                        xmin, ymin, xmax, ymax = coords
-                        count_value = 1.0
-                        edges_on_border = 0
-                        if xmin < border_margin:  # Close to left edge
-                            edges_on_border += 1
-                        if ymin < border_margin:  # Close to top edge
-                            edges_on_border += 1
-                        if xmax > (
-                            final_patch_size - 1 - border_margin
-                        ):  # Close to right edge
-                            edges_on_border += 1
-                        if ymax > (
-                            final_patch_size - 1 - border_margin
-                        ):  # Close to bottom edge
-                            edges_on_border += 1
-                        if edges_on_border == 1:
-                            count_value = 0.7
-                        elif edges_on_border >= 2:
-                            count_value = 0.5
-                        current_image_sea_lion_counts[class_name] += count_value
-                    else:
-                        print(
-                            f"Warning: Detected unknown class index {cls_idx} in patch {patch_idx} of {image_name}"
-                        )
+                if pred_boxes is not None:
+                    for box in pred_boxes:
+                        cls_idx = int(box.cls.item())
+                        confidence = float(box.conf.item())
+                        if cls_idx in sea_lion_class_name_map:
+                            class_name = sea_lion_class_name_map[cls_idx]
+                            coords = box.xyxy[0].tolist()
+                            xmin, ymin, xmax, ymax = coords
+                            count_value = 1.0
+                            edges_on_border = 0
+                            if xmin < border_margin:  # Close to left edge
+                                edges_on_border += 1
+                            if ymin < border_margin:  # Close to top edge
+                                edges_on_border += 1
+                            if xmax > (
+                                final_patch_size - 1 - border_margin
+                            ):  # Close to right edge
+                                edges_on_border += 1
+                            if ymax > (
+                                final_patch_size - 1 - border_margin
+                            ):  # Close to bottom edge
+                                edges_on_border += 1
+                            if edges_on_border == 1:
+                                count_value = 0.7
+                            elif edges_on_border >= 2:
+                                count_value = 0.5
+                            current_image_sea_lion_counts[class_name] += count_value
+
+                            # Draw bounding box on patch
+                            if visualize and save_patches:
+                                color = class_colors.get(
+                                    cls_idx, (128, 128, 128))
+                                # Draw rectangle
+                                draw_patch.rectangle(
+                                    [xmin, ymin, xmax, ymax], outline=color, width=2)
+                                # Draw label
+                                label = f"{class_name}"
+                                if draw_confidence:
+                                    label += f" {confidence:.2f}"
+                                draw_patch.text(
+                                    (xmin, ymin-15), label, fill=color, font=font)
+
+                            # Draw bounding box on full image
+                            if visualize and save_full_image:
+                                # Calculate position in full image
+                                patch_row = patch_idx // patches_per_row
+                                patch_col = patch_idx % patches_per_row
+                                offset_x = patch_col * patch_size
+                                offset_y = patch_row * patch_size
+
+                                # Scale coordinates from final_patch_size to patch_size
+                                scale_factor = patch_size / final_patch_size
+                                full_xmin = offset_x + (xmin * scale_factor)
+                                full_ymin = offset_y + (ymin * scale_factor)
+                                full_xmax = offset_x + (xmax * scale_factor)
+                                full_ymax = offset_y + (ymax * scale_factor)
+
+                                color = class_colors.get(
+                                    cls_idx, (128, 128, 128))
+                                draw_full.rectangle([full_xmin, full_ymin, full_xmax, full_ymax],
+                                                    outline=color, width=3)
+                                label = f"{class_name}"
+                                if draw_confidence:
+                                    label += f" {confidence:.2f}"
+                                draw_full.text(
+                                    (full_xmin, full_ymin-15), label, fill=color, font=font)
+
+                        else:
+                            print(
+                                f"Warning: Detected unknown class index {cls_idx} in patch {patch_idx} of {image_name}"
+                            )
+
+            # Save visualized patch if it has detections
+            if visualize and save_patches and results and len(results) > 0 and results[0].boxes is not None and len(results[0].boxes) > 0:
+                patch_filename = f"{image_id_str}_patch_{patch_idx:03d}.jpg"
+                patch_save_path = os.path.join(
+                    vis_output_dir, "patches", patch_filename)
+                vis_patch.save(patch_save_path)
+
+        # Save visualized full image
+        if visualize and save_full_image:
+            full_img_filename = f"{image_id_str}_detections.jpg"
+            full_img_save_path = os.path.join(
+                vis_output_dir, "full_images", full_img_filename)
+            vis_full_img.save(full_img_save_path)
 
         row_data = [image_id] + [
             int(round(current_image_sea_lion_counts.get(class_name, 0.0)))
@@ -199,10 +307,13 @@ def test(
             formatted_counts = {
                 k: f"{v:.1f}" for k, v in current_image_sea_lion_counts.items()
             }
-            print(f"  Aggregated counts for image ID '{image_id}': {formatted_counts}")
+            print(
+                f"  Aggregated counts for image ID '{image_id}': {formatted_counts}")
 
     if verbose:
         print("All images processed successfully.")
+        if visualize:
+            print(f"Visualizations saved to: {vis_output_dir}")
 
 
 def check_test_ids(file_path="test_result/submission.csv"):
@@ -266,17 +377,22 @@ def check_test_ids(file_path="test_result/submission.csv"):
 
 
 if __name__ == "__main__":
-    # test(
-    #     test_image_folder="SrcData/Test",
-    #     patch_size=1440,
-    #     final_patch_size=640,
-    #     # verbose=True,
-    #     verbose=False,
-    #     CONFIDENCE_THRESHOLD=0.22,
-    #     NMS_IOU_THRESHOLD=0.7,
-    #     border_margin=8,
-    #     model_path="model_ckpt/epoch99.pt",
-    #     output_dir="test_result",
-    #     submission_filename="submission.csv",
-    # )
-    check_test_ids("test_result/submission(8).csv")
+    test(
+        test_image_folder="data/Test",
+        patch_size=1440,
+        final_patch_size=640,
+        # verbose=True,
+        verbose=False,
+        CONFIDENCE_THRESHOLD=0.22,
+        NMS_IOU_THRESHOLD=0.7,
+        border_margin=8,
+        model_path="model_ckpt/epoch99.pt",
+        output_dir="test_result",
+        submission_filename="submission.csv",
+        visualize=True,  # Enable visualization
+        vis_output_dir="visualizations",
+        save_patches=True,
+        save_full_image=True,
+        draw_confidence=True,
+    )
+    # check_test_ids("test_result/submission(8).csv")
