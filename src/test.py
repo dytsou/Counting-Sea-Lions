@@ -7,6 +7,11 @@ from PIL import Image, ImageDraw, ImageFont
 from ultralytics import YOLO
 import torch
 import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from collections import defaultdict
+from scipy import ndimage
+from scipy.ndimage import gaussian_filter
 
 
 def get_test_image_names(folder_path="SrcData/Test", verbose=False):
@@ -65,6 +70,91 @@ def divide_into_patches(image_name, image, patch_size, final_patch_size, verbose
     return patches
 
 
+def create_detection_heatmap(image_shape, detections, patch_info):
+    """Create a heatmap of detection density with improved scaling"""
+    # Create higher resolution heatmap for better smoothing
+    scale_factor = 2
+    heatmap = np.zeros(
+        (image_shape[1] * scale_factor, image_shape[0] * scale_factor))
+
+    # Detection radius for spreading influence
+    # Adjust this value to change influence area
+    detection_radius = 20 * scale_factor
+
+    for detection in detections:
+        patch_idx, xmin, ymin, xmax, ymax = detection
+        patch_row = patch_idx // patch_info['patches_per_row']
+        patch_col = patch_idx % patch_info['patches_per_row']
+
+        offset_x = patch_col * patch_info['patch_size']
+        offset_y = patch_row * patch_info['patch_size']
+
+        scale_factor_coords = patch_info['patch_size'] / \
+            patch_info['final_patch_size']
+        full_xmin = int(offset_x + (xmin * scale_factor_coords))
+        full_ymin = int(offset_y + (ymin * scale_factor_coords))
+        full_xmax = int(offset_x + (xmax * scale_factor_coords))
+        full_ymax = int(offset_y + (ymax * scale_factor_coords))
+
+        # Center of detection
+        center_x = int(((full_xmin + full_xmax) // 2) * scale_factor)
+        center_y = int(((full_ymin + full_ymax) // 2) * scale_factor)
+
+        # Add detection with radius influence
+        if 0 <= center_y < heatmap.shape[0] and 0 <= center_x < heatmap.shape[1]:
+            # Create a circular influence area
+            y_indices, x_indices = np.ogrid[:heatmap.shape[0],
+                                            :heatmap.shape[1]]
+            distance = np.sqrt((x_indices - center_x)**2 +
+                               (y_indices - center_y)**2)
+
+            # Add gaussian-like influence (stronger at center, weaker at edges)
+            influence = np.exp(-(distance**2) / (2 * (detection_radius/3)**2))
+            influence[distance > detection_radius] = 0
+
+            heatmap += influence
+
+    # Apply gaussian smoothing for better visualization
+    if np.max(heatmap) > 0:
+        heatmap = gaussian_filter(heatmap, sigma=detection_radius/4)
+
+    # Resize back to original resolution
+    heatmap_resized = ndimage.zoom(heatmap, 1/scale_factor, order=1)
+
+    return heatmap_resized
+
+
+def save_detection_statistics(stats, output_dir, image_id):
+    """Save detection statistics as a plot"""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Class distribution
+    classes = list(stats['class_counts'].keys())
+    counts = list(stats['class_counts'].values())
+    colors = ['red', 'green', 'blue', 'yellow', 'magenta']
+
+    ax1.bar(classes, counts, color=colors[:len(classes)])
+    ax1.set_title(f'Detection Counts - Image {image_id}')
+    ax1.set_xlabel('Sea Lion Class')
+    ax1.set_ylabel('Count')
+    ax1.tick_params(axis='x', rotation=45)
+
+    # Confidence distribution
+    if stats['confidences']:
+        ax2.hist(stats['confidences'], bins=20, alpha=0.7, color='skyblue')
+        ax2.set_title('Confidence Score Distribution')
+        ax2.set_xlabel('Confidence Score')
+        ax2.set_ylabel('Frequency')
+        ax2.axvline(np.mean(stats['confidences']), color='red', linestyle='--',
+                    label=f'Mean: {np.mean(stats["confidences"]):.2f}')
+        ax2.legend()
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(
+        output_dir, f'{image_id}_stats.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+
+
 def test(
     test_image_folder="data/Test",
     patch_size=640,
@@ -81,6 +171,10 @@ def test(
     save_patches=True,
     save_full_image=True,
     draw_confidence=True,
+    show_live_preview=False,
+    save_heatmaps=False,
+    save_statistics=False,
+    show_progress_counts=True,
 ):
     sea_lion_class_name_map = {
         0: "adult_males",
@@ -138,10 +232,16 @@ def test(
 
     # Create visualization directories if needed
     if visualize:
-        if save_patches and not os.path.exists(os.path.join(vis_output_dir, "patches")):
-            os.makedirs(os.path.join(vis_output_dir, "patches"))
-        if save_full_image and not os.path.exists(os.path.join(vis_output_dir, "full_images")):
-            os.makedirs(os.path.join(vis_output_dir, "full_images"))
+        subdirs = ["patches", "full_images"]
+        if save_heatmaps:
+            subdirs.append("heatmaps")
+        if save_statistics:
+            subdirs.append("statistics")
+
+        for subdir in subdirs:
+            path = os.path.join(vis_output_dir, subdir)
+            if not os.path.exists(path):
+                os.makedirs(path)
         if verbose:
             print(f"Created visualization directory: {vis_output_dir}")
 
@@ -155,14 +255,25 @@ def test(
         except (OSError, IOError):
             font = ImageFont.load_default()
 
+    # Global statistics
+    global_stats = defaultdict(int)
+    all_confidences = []
+
     with open(output_csv_file, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(csv_column_order)
 
     image_names_list = get_test_image_names(test_image_folder, verbose=verbose)
-    bar = tqdm.tqdm(image_names_list,
-                    ncols=120) if not verbose else image_names_list
-    for image_name in bar:
+
+    # Create progress bar only when not verbose
+    if not verbose:
+        progress_bar = tqdm.tqdm(image_names_list, ncols=120)
+        image_iterator = progress_bar
+    else:
+        progress_bar = None
+        image_iterator = image_names_list
+
+    for image_name in image_iterator:
         image_id_str = os.path.splitext(image_name)[0]
         try:
             image_id = int(image_id_str)
@@ -186,12 +297,24 @@ def test(
             "pups": 0,
         }
 
+        # For statistics and heatmap
+        image_stats = {
+            'class_counts': defaultdict(int),
+            'confidences': [],
+            'detections': []
+        }
+
         # For full image visualization
         if visualize and save_full_image:
             vis_full_img = resized_img.copy()
             draw_full = ImageDraw.Draw(vis_full_img)
 
         patches_per_row = resized_img.size[0] // patch_size
+        patch_info = {
+            'patches_per_row': patches_per_row,
+            'patch_size': patch_size,
+            'final_patch_size': final_patch_size
+        }
 
         for patch_idx, patch_img in enumerate(image_patches):
             results = model.predict(
@@ -236,6 +359,14 @@ def test(
                             elif edges_on_border >= 2:
                                 count_value = 0.5
                             current_image_sea_lion_counts[class_name] += count_value
+
+                            # Update statistics
+                            image_stats['class_counts'][class_name] += 1
+                            image_stats['confidences'].append(confidence)
+                            image_stats['detections'].append(
+                                (patch_idx, xmin, ymin, xmax, ymax))
+                            global_stats[class_name] += 1
+                            all_confidences.append(confidence)
 
                             # Draw bounding box on patch
                             if visualize and save_patches:
@@ -295,6 +426,60 @@ def test(
                 vis_output_dir, "full_images", full_img_filename)
             vis_full_img.save(full_img_save_path)
 
+        # Save heatmap
+        if visualize and save_heatmaps and image_stats['detections']:
+            heatmap = create_detection_heatmap(
+                resized_img.size, image_stats['detections'], patch_info)
+
+            # Improved heatmap visualization
+            plt.figure(figsize=(12, 10))
+
+            # Show original image as background (optional)
+            plt.imshow(np.array(resized_img), alpha=0.6, cmap='gray')
+
+            # Overlay heatmap with improved scaling
+            if np.max(heatmap) > 0:
+                # Use log scale for better visualization of small values
+                heatmap_normalized = heatmap / np.max(heatmap)
+                # Apply power scaling to enhance low values
+                heatmap_enhanced = np.power(
+                    heatmap_normalized, 0.5)  # Square root scaling
+
+                im = plt.imshow(heatmap_enhanced, cmap='hot', alpha=0.8,
+                                interpolation='bilinear', vmin=0, vmax=1)
+
+                # Colorbar with better labeling
+                cbar = plt.colorbar(
+                    im, label='Detection Density (Normalized)', shrink=0.8)
+                cbar.set_label('Detection Density (Normalized)', fontsize=12)
+
+                # Add detection count info
+                total_detections = len(image_stats['detections'])
+                plt.text(0.02, 0.98, f'Total Detections: {total_detections}',
+                         transform=plt.gca().transAxes, fontsize=12,
+                         bbox=dict(boxstyle='round',
+                                   facecolor='white', alpha=0.8),
+                         verticalalignment='top')
+            else:
+                plt.text(0.5, 0.5, 'No Detections Found',
+                         transform=plt.gca().transAxes, fontsize=16,
+                         ha='center', va='center',
+                         bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.8))
+
+            plt.title(f'Detection Density Heatmap - Image {image_id}\n'
+                      f'Classes: {dict(image_stats["class_counts"])}', fontsize=14)
+            plt.axis('off')  # Remove axes for cleaner look
+
+            # Save with higher DPI for better quality
+            plt.savefig(os.path.join(vis_output_dir, "heatmaps", f"{image_id_str}_heatmap.png"),
+                        dpi=200, bbox_inches='tight', facecolor='white')
+            plt.close()
+
+        # Save statistics
+        if visualize and save_statistics:
+            save_detection_statistics(image_stats, os.path.join(
+                vis_output_dir, "statistics"), image_id_str)
+
         row_data = [image_id] + [
             int(round(current_image_sea_lion_counts.get(class_name, 0.0)))
             for class_name in csv_column_order[1:]
@@ -303,6 +488,19 @@ def test(
             writer = csv.writer(csvfile)
             writer.writerow(row_data)
 
+        # Update progress bar with current counts (only if progress bar exists)
+        if show_progress_counts and progress_bar is not None:
+            total_detected = sum(image_stats['class_counts'].values())
+            progress_bar.set_postfix({
+                'ID': image_id,
+                'Detected': total_detected,
+                'AM': image_stats['class_counts']['adult_males'],
+                'SM': image_stats['class_counts']['subadult_males'],
+                'AF': image_stats['class_counts']['adult_females'],
+                'J': image_stats['class_counts']['juveniles'],
+                'P': image_stats['class_counts']['pups']
+            })
+
         if verbose:
             formatted_counts = {
                 k: f"{v:.1f}" for k, v in current_image_sea_lion_counts.items()
@@ -310,10 +508,41 @@ def test(
             print(
                 f"  Aggregated counts for image ID '{image_id}': {formatted_counts}")
 
+    # Save global statistics
+    if visualize and save_statistics:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+        # Global class distribution
+        classes = list(global_stats.keys())
+        counts = list(global_stats.values())
+        colors = ['red', 'green', 'blue', 'yellow', 'magenta']
+
+        ax1.bar(classes, counts, color=colors[:len(classes)])
+        ax1.set_title('Global Detection Counts - All Images')
+        ax1.set_xlabel('Sea Lion Class')
+        ax1.set_ylabel('Total Count')
+        ax1.tick_params(axis='x', rotation=45)
+
+        # Global confidence distribution
+        if all_confidences:
+            ax2.hist(all_confidences, bins=50, alpha=0.7, color='skyblue')
+            ax2.set_title('Global Confidence Score Distribution')
+            ax2.set_xlabel('Confidence Score')
+            ax2.set_ylabel('Frequency')
+            ax2.axvline(np.mean(all_confidences), color='red', linestyle='--',
+                        label=f'Mean: {np.mean(all_confidences):.2f}')
+            ax2.legend()
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(vis_output_dir, "statistics", "global_stats.png"),
+                    dpi=150, bbox_inches='tight')
+        plt.close()
+
     if verbose:
         print("All images processed successfully.")
         if visualize:
             print(f"Visualizations saved to: {vis_output_dir}")
+            print(f"Global detection summary: {dict(global_stats)}")
 
 
 def check_test_ids(file_path="test_result/submission.csv"):
@@ -378,7 +607,7 @@ def check_test_ids(file_path="test_result/submission.csv"):
 
 if __name__ == "__main__":
     test(
-        test_image_folder="data/Test",
+        test_image_folder="data/TestSmall",
         patch_size=1440,
         final_patch_size=640,
         # verbose=True,
@@ -394,5 +623,9 @@ if __name__ == "__main__":
         save_patches=True,
         save_full_image=True,
         draw_confidence=True,
+        show_live_preview=True,
+        save_heatmaps=True,
+        save_statistics=True,
+        show_progress_counts=True,
     )
-    # check_test_ids("test_result/submission(8).csv")
+    check_test_ids("test_result/submission(8).csv")
