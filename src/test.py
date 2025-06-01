@@ -267,7 +267,15 @@ def test(
 
     # Create progress bar only when not verbose
     if not verbose:
-        progress_bar = tqdm.tqdm(image_names_list, ncols=120)
+        progress_bar = tqdm.tqdm(
+            image_names_list,
+            ncols=120,
+            position=0,
+            leave=True,
+            dynamic_ncols=True,
+            desc="Processing",
+            bar_format='{l_bar}{bar:30}{r_bar}'
+        )
         image_iterator = progress_bar
     else:
         progress_bar = None
