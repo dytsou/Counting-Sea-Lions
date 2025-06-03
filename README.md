@@ -10,6 +10,7 @@ This repository presents YouCount, a robust automated framework for counting Ste
 - [Technical Innovation](#technical-innovation)
 - [Repository Structure](#repository-structure)
 - [Environment Configuration](#environment-configuration)
+- [Usage](#usage)
 - [Dataset Description](#dataset-description)
 - [Methodology](#methodology)
   - [Adaptive Bounding Box Annotation (ABC)](#adaptive-bounding-box-annotation-abc)
@@ -45,23 +46,19 @@ YouCount introduces two primary innovations to address these challenges:
 
 ```
 .
-├── data/
-│   ├── train/
-│   │   ├── images/      # Training images (946 images)
-│   │   ├── labels/      # YOLO format labels with ABC annotation
-│   │   └── masks/       # Dotted image masks for background removal
-│   ├── test/
-│   │   └── images/      # Test images
-│   └── patches/         # Generated training patches (1280×1280 → 640×640)
 ├── src/
-│   ├── preprocess.py    # ABC framework implementation
-│   ├── train.py         # YOLO11x training pipeline
-│   ├── predict.py       # Inference with post-processing
-│   ├── config.py        # Hyperparameter configuration
-│   └── utils.py         # ABC utilities and patch generation
-├── models/
-│   └── best.pt          # Best trained YOLO11x weights
-└── requirements.txt     # Dependencies
+│   ├── pre-process-detection.py    # ABC framework implementation and patch generation
+│   ├── train.py                    # YOLO11x training pipeline
+│   ├── test.py                     # Inference and evaluation pipeline
+│   ├── post-process.py             # Post-processing for improved recognition
+│   └── dataset_detection.py        # Dataset utilities and configuration
+├── visualizations/
+│   ├── patches/                    # Sample patch visualizations with detections
+│   ├── statistics/                 # Statistical analysis plots
+│   ├── heatmaps/                   # Detection density heatmaps
+│   └── full_images/                # Full image detection visualizations
+├── requirements.txt                # Python dependencies
+└── README.md                       # Project documentation
 ```
 
 ## Environment Configuration
@@ -88,6 +85,61 @@ YouCount introduces two primary innovations to address these challenges:
    ```bash
    pip install ultralytics==8.0.196 opencv-python==4.8.0 pandas==2.0.3 numpy==1.24.3 matplotlib==3.7.1
    ```
+
+## Usage
+
+### Preprocessing for Training Data Generation
+
+Use the preprocessing pipeline to generate JSON annotation files from the original point-based annotations:
+
+```bash
+python src/pre-process-detection.py
+```
+
+This script performs the following operations:
+- Implements the Adaptive Bounding Boxes Coordinates Annotation Framework (ABC)
+- Converts point annotations to adaptive bounding boxes based on IoU calculations
+- Generates dual patch strategy samples (overfitting-based and tiling-based patches)
+- Outputs YOLO-format JSON annotation files for training
+- Creates training patches with corresponding labels in `data/patches/`
+
+**Key outputs:**
+- `data/train/labels/` - YOLO format labels with ABC annotation
+- `data/patches/` - Generated training patches (640×640 from 1280×1280 originals)
+- Training-ready JSON files with adaptive bounding box coordinates
+
+### Training the Model
+
+```bash
+python src/train.py
+```
+
+### Inference and Post-Processing
+
+For optimal recognition results, use the inference pipeline with integrated post-processing:
+
+```bash
+python src/test.py
+```
+
+The post-processing pipeline enhances recognition through:
+- **Boundary weighting strategy**: Adjusts confidence scores based on detection proximity to patch edges
+- **Category-specific scaling**: Applies empirically-derived scaling factors to correct class-specific biases
+- **Non-Maximum Suppression**: Filters overlapping detections with optimized IoU thresholds
+- **Multi-patch aggregation**: Combines predictions from overlapping patches for comprehensive coverage
+
+**Post-processing improvements:**
+- Reduces RMSE by 0.8 points through bias correction
+- Handles edge artifacts from patch-based inference
+- Corrects category-specific detection imbalances (e.g., 30% increase for pups, 55% increase for adult males)
+
+### Additional Post-Processing
+
+For enhanced post-processing operations, you can also use:
+
+```bash
+python src/post-process.py
+```
 
 ## Dataset Description
 
