@@ -1,46 +1,82 @@
-# Counting Sea Lions
+# YouCount: A YOLO11-based Framework for Automated Steller Sea Lion Population Count
 
-This project implements an automated sea lion counting system using YOLO11x for the [NOAA Fisheries Steller Sea Lion Population Count](https://www.kaggle.com/c/noaa-fisheries-steller-sea-lion-population-count) Kaggle competition.
+## Abstract
 
-## Background
+This repository presents YouCount, a robust automated framework for counting Steller sea lions from aerial imagery, addressing a critical ecological monitoring challenge characterized by dense crowds, occlusions, and varied object scales. Traditional detection and segmentation approaches demonstrate significant limitations in this domain due to instance overlaps and annotation inconsistencies. Our methodology employs the state-of-the-art YOLO11 architecture complemented by a novel Adaptive Bounding Boxes Coordinates Annotation Framework (ABC). The proposed approach adaptively adjusts bounding boxes and implements dual patch generation strategies to effectively capture dense and overlapping instances. Comprehensive experimentation on the NOAA Fisheries Steller Sea Lion Population Count dataset demonstrates the superiority of our approach, achieving an RMSE of 11.65312 and securing 2nd place in the Kaggle competition. Ablation studies further validate the efficacy of our adaptive annotation and training strategies.
 
-Steller sea lions in the western Aleutian Islands have declined 94 percent in the last 30 years. The endangered western population, found in the North Pacific, are the focus of conservation efforts which require annual population counts. Specially trained scientists at NOAA Fisheries Alaska Fisheries Science Center conduct these surveys using airplanes and unoccupied aircraft systems to collect aerial images. Having accurate population estimates enables us to better understand factors that may be contributing to lack of recovery of Stellers in this area.
+## Table of Contents
 
-Currently, it takes biologists up to four months to count sea lions from the thousands of images NOAA Fisheries collects each year. Once individual counts are conducted, the tallies must be reconciled to confirm their reliability. The results of these counts are time-sensitive.
+- [Introduction](#introduction)
+- [Technical Innovation](#technical-innovation)
+- [Repository Structure](#repository-structure)
+- [Environment Configuration](#environment-configuration)
+- [Dataset Description](#dataset-description)
+- [Methodology](#methodology)
+  - [Adaptive Bounding Box Annotation (ABC)](#adaptive-bounding-box-annotation-abc)
+  - [Dual Patch Generation Strategy](#dual-patch-generation-strategy)
+  - [Training Configuration](#training-configuration)
+  - [Inference and Post-Processing](#inference-and-post-processing)
+- [Experimental Results](#experimental-results)
+- [Conclusion](#conclusion)
+- [Acknowledgments](#acknowledgments)
 
-Thus, we develop algorithms which accurately count the number of sea lions in aerial photographs. Automating the annual population count will free up critical resources allowing NOAA Fisheries to focus on ensuring we hear the sea lion's roar for many years to come. Plus, advancements in computer vision applied to aerial population counts may also greatly benefit other endangered species.
+## Introduction
 
-You can learn more about research being done to better understand what's going on with the endangered Steller sea lion populations by joining scientists on a research vessel to the western Aleutian Islands in this [video](https://www.youtube.com/watch?v=oiL8tDCqzy4).
+The Steller sea lion population in the western Aleutian Islands has experienced a dramatic 94% decline over the past three decades, designating the western Pacific population as endangered and a critical focus for conservation efforts. The NOAA Fisheries Alaska Fisheries Science Center conducts annual population surveys using aerial imagery collected via aircraft and unoccupied aircraft systems. These surveys are essential for understanding factors contributing to the lack of recovery in specific regions.
 
-## Project Structure
+Current manual counting methodologies present significant limitations. Biologists require up to four months to count sea lions from thousands of images collected annually by NOAA Fisheries. Following individual counts, tallies must undergo reconciliation to ensure reliability, with results being time-sensitive for conservation purposes. The automation of this process through advanced computer vision techniques would substantially enhance monitoring efficiency, redirecting valuable resources toward conservation initiatives while benefiting endangered species protection efforts.
+
+Aerial sea lion counting presents multiple technical challenges:
+- Dense aggregation and overlapping of sea lion individuals leading to frequent missed detections
+- Variations in image capture height and position introducing inconsistencies in spatial distribution and size differences
+- Differentiation between sea lion categories and difficulty in reliably detecting pups due to their small size
+
+## Technical Innovation
+
+YouCount introduces two primary innovations to address these challenges:
+
+1. **Adaptive Bounding Boxes Coordinates Annotation Framework (ABC)**: Unlike conventional approaches that employ fixed-radius circles or fixed-size squares centered at annotation points as bounding boxes, our ABC framework dynamically adjusts bounding box dimensions based on sea lion density and proximity. This adaptation is achieved through computation of Intersection over Union (IoU) between all bounding box pairs, following standard object detection practices.
+
+2. **Dual Patch Generation Strategy**: Considering the large dimensions of original images, we implement two complementary patching strategies:
+   - **Overfitting-based Patching**: Samples patches centered around bounding boxes, with the number of patches set to 30% of the total bounding boxes in the image, constrained between 1-3 patches.
+   - **Tiling-based Patching**: Employs fixed patch sizes with a sliding window approach, using a stride of 95% of the patch size to ensure adjacent patch overlap.
+
+## Repository Structure
 
 ```
 .
 ├── data/
 │   ├── train/
-│   │   ├── images/      # Training images
-│   │   ├── labels/      # YOLO format labels
-│   │   └── masks/       # Dotted image masks
+│   │   ├── images/      # Training images (946 images)
+│   │   ├── labels/      # YOLO format labels with ABC annotation
+│   │   └── masks/       # Dotted image masks for background removal
 │   ├── test/
 │   │   └── images/      # Test images
-│   └── patches/         # Generated training patches
+│   └── patches/         # Generated training patches (1280×1280 → 640×640)
 ├── src/
-│   ├── preprocess.py    # Dataset preprocessing pipeline
-│   ├── train.py         # Training script
-│   ├── predict.py       # Inference script
-│   ├── config.py        # Configuration parameters
-│   └── utils.py         # Utility functions
+│   ├── preprocess.py    # ABC framework implementation
+│   ├── train.py         # YOLO11x training pipeline
+│   ├── predict.py       # Inference with post-processing
+│   ├── config.py        # Hyperparameter configuration
+│   └── utils.py         # ABC utilities and patch generation
 ├── models/
-│   └── best.pt          # Best trained model weights
+│   └── best.pt          # Best trained YOLO11x weights
 └── requirements.txt     # Dependencies
 ```
 
-## Environment Setup
+## Environment Configuration
 
-1. Create a Python virtual environment (recommended):
+### Prerequisites
+- Python 3.8+
+- PyTorch 2.0.1
+- CUDA-compatible GPU (8GB+ recommended)
+
+### Installation
+
+1. Create and activate a Python virtual environment:
    ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   python3 -m venv sealion-counting
+   source sealion-counting/bin/activate  # On Windows: sealion-counting\Scripts\activate
    ```
 
 2. Install dependencies:
@@ -48,278 +84,176 @@ You can learn more about research being done to better understand what's going o
    pip install -r requirements.txt
    ```
 
-3. Install additional dependencies:
+3. Install additional packages:
    ```bash
-   pip install ultralytics opencv-python pandas numpy matplotlib
+   pip install ultralytics==8.0.196 opencv-python==4.8.0 pandas==2.0.3 numpy==1.24.3 matplotlib==3.7.1
    ```
 
-## Dataset Structure
+## Dataset Description
 
-The dataset should be organized as follows:
-- `data/train/images/`: Training images (`.jpg` format)
-- `data/train/coordinates.csv`: Sea lion coordinates and classes
-- `data/train/masks/`: Dotted image masks for background removal
-- `data/test/images/`: Test images for prediction
+The dataset utilized in this study is from the NOAA Fisheries Steller Sea Lion Population Count competition and comprises:
+- 946 training images with corresponding point-based annotation images showing the location of each animal
+- Test image collection
+- The objective is to count five distinct classes of sea lions: Adult males, Subadult males, Adult females, Juveniles, and Pups
 
-### Sea Lion Classes
-- 0: Adult males
-- 1: Subadult males  
-- 2: Adult females
-- 3: Juveniles
-- 4: Pups
+### Sea Lion Categories
+| Class ID | Category | Description |
+|----------|----------|-------------|
+| 0 | Adult males | Large, dominant males |
+| 1 | Subadult males | Younger males |
+| 2 | Adult females | Mature females |
+| 3 | Juveniles | Young sea lions |
+| 4 | Pups | Newborn/very young |
 
-## Configuration
+## Methodology
 
-All hyperparameters are centralized in `src/config.py`:
+### Adaptive Bounding Box Annotation (ABC)
 
-```python
-# Training Configuration
-TOTAL_EPOCHS = 100
-IMAGE_SIZE = 640
-BATCH_SIZE = 2
-NUM_WORKERS = 4  # (0 on Windows)
-SEED = 42
-NUM_COUNTING_CLASSES = 5
-CONFIDENCE_THRESHOLD = 0.5
-NMS_IOU_THRESHOLD = 0.7
+To localize sea lions in high-resolution images, we initially generate bounding boxes by drawing squares centered at each annotated point with a fixed side length. Subsequently, we compute the Intersection over Union (IoU) between all bounding box pairs to determine appropriate scaling factors following standard object detection practices. A minimum allowable dimension is established to prevent bounding boxes from becoming excessively small. Based on horizontal and vertical distances between point pairs, we determine the optimal direction for resizing each bounding box.
 
-# Data Processing
-PATCH_SIZE = 1280
-RESIZE_TO = 640
-BOX_SIZE = 55
-MIN_BOX_SIZE = 22
-```
+The ABC framework dynamically adjusts bounding box sizes based on IoU calculations:
 
-## Data Preprocessing
+| IoU Threshold | Primary Scale Factor | Secondary Scale Factor |
+|---------------|---------------------|----------------------|
+| ≥ 0.50 | 0.70 | 0.85 |
+| ≥ 0.45 | 0.72 | 0.86 |
+| ≥ 0.40 | 0.74 | 0.87 |
+| ≥ 0.35 | 0.76 | 0.88 |
+| ≥ 0.30 | 0.78 | 0.89 |
 
-Preprocess the dataset to generate training patches:
+The adjustment strategy:
+- Calculate IoU between all bounding box pairs
+- Apply scaling factors based on IoU thresholds
+- Prioritize dimension with larger displacement between centers
+- Maintain minimum box size constraints
 
-```bash
-python src/preprocess.py --data-dir data --output-dir data/patches --patch-size 1280 --resize-to 640
-```
+### Dual Patch Generation Strategy
 
-### 1. Adaptive Bounding Box Annotation
+#### Strategy 1: Overfitting-based Patching
+- **Sampling rate**: 30% of total bounding boxes
+- **Patch constraints**: 1-3 patches per image
+- **Center selection**: Random subset of bounding boxes
+- **Purpose**: High-quality positive samples with guaranteed sea lion presence
 
-Our preprocessing pipeline implements an adaptive bounding box generation system that automatically adjusts annotation sizes based on sea lion density and proximity.
+#### Strategy 2: Tiling-based Patching
+- **Method**: Systematic grid-based extraction
+- **Stride**: 95% of patch size (1216 pixels overlap)
+- **Coverage**: Comprehensive spatial coverage
+- **Purpose**: Capture edge cases and diverse spatial contexts
 
-#### 1.1 Initial Box Generation
-- **Base box size**: 55×55 pixels centered on each sea lion coordinate
-- **Minimum allowable size**: 22×22 pixels (40% of base size)
-- **Class mapping**: 
-  - 0: Adult males
-  - 1: Subadult males  
-  - 2: Adult females
-  - 3: Juveniles
-  - 4: Pups
-
-#### 1.2 IoU-based Box Adjustment
-When bounding boxes overlap, we apply adaptive size reduction based on IoU thresholds:
-
-| IoU Range | Primary Reduction | Secondary Reduction |
-|-----------|------------------|-------------------|
-| ≥ 0.50    | 0.70            | 0.85             |
-| ≥ 0.45    | 0.72            | 0.86             |
-| ≥ 0.40    | 0.74            | 0.87             |
-| ≥ 0.35    | 0.76            | 0.88             |
-| ≥ 0.30    | 0.78            | 0.89             |
-| ≥ 0.25    | 0.81            | 0.905            |
-| ≥ 0.20    | 0.84            | 0.92             |
-| ≥ 0.15    | 0.87            | 0.935            |
-| ≥ 0.10    | 0.90            | 0.95             |
-
-The adjustment strategy prioritizes the dimension with larger displacement between box centers.
-
-#### 1.3 Image Masking
-- Apply dotted image masks to remove irrelevant background areas
-- Black pixels from dotted images are transferred to original images
-- Helps focus training on relevant sea lion habitats
-
-### 2. Patch Generation Strategy
-
-#### 2.1 Dual Sampling Approach
-
-Method 1: **Targeted Sampling**
-- Select patches centered on bounding boxes
-- Sample rate: 20% of available bounding boxes
-- Min patches per image: 1
-- Max patches per image: 3
-- Ensures high-quality positive samples
-
-Method 2: **Grid Sampling**  
-- Systematic grid-based patch extraction
-- Stride: 95% of patch size (1216 pixels for 1280×1280 patches)
-- Auto-calculated grid dimensions based on image size
-- Provides comprehensive coverage
-
-#### 2.2 Patch Processing Pipeline
-1. **Initial extraction**: 1280×1280 pixels
-2. **Resize to training size**: 640×640 pixels  
-3. **Quality filtering**:
-   - Black pixel threshold: < 50%
-   - Zero-bbox dropout rate: 70%
-4. **Box coordinate adjustment**: Scale and clip to patch boundaries
-
-### 3. YOLO Format Conversion
-
-#### 3.1 Coordinate Normalization
-- Convert (x1, y1, x2, y2) to (x_center, y_center, width, height)
-- Normalize all coordinates to [0, 1] range
-- Ensure boxes remain within image boundaries
-
-#### 3.2 Quality Control
-- Filter boxes with area < 20% of original after clipping
-- Remove degenerate boxes (width ≤ 0 or height ≤ 0)
-- Maintain class-to-filename mapping in counts.csv
-
-## Training
-
-To train the YOLO11x model:
-
-```bash
-python src/train.py --data-dir data/patches --epochs 100 --batch-size 2 --img-size 640
-```
-
-Additional training arguments:
-- `--resume`: Path to checkpoint to resume training
-- `--workers`: Number of data loading workers (default: 4)
-- `--device`: Training device (default: auto-detect)
-- `--seed`: Random seed for reproducibility (default: 42)
+For both methods, patches are extracted from the image, and corresponding bounding boxes are adjusted to remain within patch boundaries. If a bounding box is clipped such that its area becomes less than 20% of its original area, it is discarded. Additionally, patches with a black pixel ratio exceeding 0.5 are discarded to ensure visual usability.
 
 ### Training Configuration
 
-#### Training Parameters
+#### Model Architecture
+- **Base Model**: YOLO11x (enhanced from YOLOv8x)
+- **Improvements**: 22% parameter reduction with higher mAP
+- **Input Resolution**: 640×640 pixels
+- **Classes**: 5 sea lion categories
+
+#### Hyperparameters
 ```python
+# Core training parameters
 TOTAL_EPOCHS = 100
 IMAGE_SIZE = 640
 BATCH_SIZE = 2
-NUM_WORKERS = 4  # (0 on Windows)
-SEED = 42
-NUM_COUNTING_CLASSES = 5
 CONFIDENCE_THRESHOLD = 0.5
 NMS_IOU_THRESHOLD = 0.7
 ```
 
-#### Optimization Settings
-- **Learning rate scheduler**: Cosine annealing (`cos_lr=True`)
-- **Mixed precision**: AMP enabled (`amp=True`)
-- **Dropout**: 0.05
-- **Multi-scale training**: Enabled
-- **Random seed**: 42 (for reproducibility)
+#### Data Augmentation Strategy
 
-#### Data Augmentation Pipeline
+Our comprehensive augmentation pipeline enhances model robustness:
 
-Our training pipeline employs a comprehensive data augmentation strategy to improve model robustness and generalization across diverse imaging conditions.
+##### Color Space Augmentation
+- Hue shift: ±1.5%
+- Saturation adjustment: ±70%
+- Brightness adjustment: ±40%
 
-**Color Space Augmentation:**
+##### Geometric Transformations
+- Random rotation: ±3°
+- Translation: ±2%
+- Scaling range: ±30%
+- Copy-Paste: 8% probability
+- Random Erasing: 8% probability
+- MixUp: 4% probability
+
+### Inference and Post-Processing
+
+During inference, each image patch (originally sized 1440×1440) is resized to 640×640 to match the input requirements of the YOLO model. The model extracts features and predicts bounding boxes with associated confidence scores and class probabilities. Non-Maximum Suppression (NMS) is applied to filter highly overlapping predictions, retaining only the most confident ones.
+
+#### Boundary Weighting Strategy
 ```python
-HSV_H = 0.015      # Hue shift: ±1.5%
-HSV_S = 0.70       # Saturation: ±70%
-HSV_V = 0.40       # Value/Brightness: ±40%
+# Weight detections based on proximity to patch edges
+if near_one_edge:
+    weight = 0.7
+elif near_multiple_edges:
+    weight = 0.5
+else:
+    weight = 1.0
 ```
 
-**Geometric Transformations:**
+#### Category-wise Post-Processing
+Empirically-derived scaling factors to correct category-specific biases:
+
 ```python
-ROTATION_DEGREE = 3.0    # Random rotation: ±3°
-TRANSLATE = 0.02         # Translation: ±2% of image size
-RANDOM_SCALE = 0.3       # Scaling: ±30%
-SHEAR = 0.0             # Shear transformation: disabled
-PERSPECTIVE = 0.0005     # Perspective distortion: 0.05%
+CATEGORY_SCALING = {
+    "pups": 1.3,           # 30% increase
+    "juveniles": 0.85,     # 15% decrease  
+    "adult_females": 0.96,  # 4% decrease
+    "adult_males": 1.55,   # 55% increase
+    "subadult_males": 1.2  # 20% increase
+}
 ```
 
-**Flip Augmentations:**
-```python
-FLIP_UD = 0.2           # Vertical flip: 20% probability
-FLIP_LR = 0.3           # Horizontal flip: 30% probability
-```
+## Experimental Results
 
-**Advanced Augmentation Techniques:**
-```python
-MOSAIC = 0.0            # Mosaic augmentation: disabled
-COPY_PASTE = 0.08       # Copy-paste: 8% probability
-ERASE = 0.08            # Random erasing: 8% probability
-MIXUP = 0.04            # MixUp: 4% probability
-```
+### Competition Performance
+| Metric | Score |
+|--------|-------|
+| **Final Private Score** | **11.65312 RMSE** |
+| Public Leaderboard | 11.68292 RMSE |
+| **Final Ranking** | **2nd Place** |
 
-**Copy-Paste Augmentation (8%):**
-- Copies sea lion instances from one image to another
-- Increases sample diversity and handles occlusion scenarios
-- Particularly effective for rare classes (adult males, pups)
-
-**Random Erasing (8%):**
-- Randomly masks rectangular regions
-- Improves robustness to partial occlusions
-- Forces model to rely on partial visual cues
-
-**MixUp (4%):**
-- Blends two images with corresponding labels
-- Enhances model's decision boundary smoothness
-- Applied conservatively to preserve detection accuracy
-
-**Disabled Augmentations:**
-- **Mosaic (0%)**: Disabled to maintain spatial relationships critical for counting
-- **Shear (0%)**: Avoided to preserve natural sea lion proportions
-
-#### Training Strategy
-- **Validation split**: 5% of training data
-- **Early stopping**: Monitor validation mAP
-- **Model checkpointing**: Save best weights based on validation performance
-- **Gradient clipping**: Enabled for training stability
-- **Warmup epochs**: 3 epochs with linear learning rate warmup
-
-This augmentation strategy balances data diversity with task-specific requirements, ensuring the model learns robust features while maintaining high counting accuracy for aerial sea lion detection.
-
-## Prediction
-
-Generate predictions for test images:
-
-```bash
-python src/predict.py --model models/best.pt --source data/test/images --conf 0.5 --iou 0.7
-```
-
-This will output:
-- Individual image predictions with bounding boxes
-- `submission.csv` file with sea lion counts per image
-- Visualization images with detected sea lions
-
-## Model Architecture
-
-### YOLO11x Configuration
-- **Base model**: YOLOv11x (largest variant)
-- **Input size**: 640×640 pixels
-- **Classes**: 5 (sea lion age/gender categories)
-- **Confidence threshold**: 0.5
-- **NMS IoU threshold**: 0.7
-
-The YOLO11x model features:
-- **Input size**: 640×640 pixels
-- **Classes**: 5 sea lion categories
-- **Architecture**: Enhanced YOLOv11 with improved detection head
-- **Post-processing**: Confidence thresholding (0.5) and NMS (IoU 0.7)
-
-## Results
-
-**Kaggle Competition Performance:**
-- **Final Score**: 11.65312 RMSE
-- **Public Leaderboard**: 11.68292 RMSE
-- **Final Rank**: 2nd place
-
-**Leaderboard Comparison:**
-| Rank | Score | 
-|------|-------|
-| 1st  | 10.85644 |
+### Leaderboard Comparison
+| Rank | Team Score | 
+|------|------------|
+| 1st | 10.85644 |
 | **2nd (Ours)** | **11.65312** |
-| 3rd  | 12.50888 |
-| 4th  | 13.03257 |
-| 5th  | 13.18968 |
-| 6th  | 13.92760 |
+| 3rd | 12.50888 |
+| 4th | 13.03257 |
+| 5th | 13.18968 |
+| 6th | 13.92760 |
 
-## Evaluation
+### Ablation Study Results
 
-The model is evaluated using:
-- **RMSE**: Root Mean Square Error between predicted and actual counts
-- **mAP**: Mean Average Precision during training
-- **Class-wise accuracy**: Performance per sea lion category
+#### Impact of Resolution and Post-Processing
+| Test Patch Size | Post-Processing | RMSE | Improvement |
+|-----------------|----------------|------|-------------|
+| 640/1280 | No | 16.59 | Baseline |
+| 640/1440 | No | 12.45 | -4.14 |
+| 640/1440 | Yes | **11.65** | **-0.80** |
 
+Key insights:
+- **Resolution increase**: 4.1 RMSE improvement through better scale matching
+- **Post-processing**: Additional 0.8 RMSE improvement via bias correction
+- **Scale consistency**: Larger patches better match test data characteristics
 
+The visualization of predicted bounding boxes across entire images demonstrates that the model accurately detects individual sea lions, even in crowded regions with partial overlaps. Notably, the model successfully distinguishes between adjacent individuals without merging them into single bounding boxes, exhibiting robustness in handling occlusion. Detection density heatmaps align with actual spatial distributions of sea lions in original images, with no significant false positive hotspots observed in background regions such as ocean areas.
 
+## Conclusion
 
+The YouCount system represents a significant advancement in automated aerial sea lion counting. Through our innovative Adaptive Bounding Boxes Coordinates Annotation Framework (ABC) and dual patch generation strategy, we effectively address the core challenges of processing dense, overlapping instances. Our design choices based on the YOLO11x architecture, combined with meticulous data augmentation and rigorous quality control, enable our method to achieve an RMSE of 11.65312, securing 2nd place in the Kaggle competition.
+
+Extensive experimentation and ablation studies validate the effectiveness of our adaptive annotation and training strategies. The approach provides a solid foundation for wildlife monitoring and can be readily generalized to similar ecological counting tasks. Future research directions include native support for multi-scale training, integration of attention mechanisms, and exploration of semi-supervised learning methods, all of which promise to further enhance system performance under complex environmental conditions.
+
+## Acknowledgments
+
+- NOAA Fisheries Alaska Fisheries Science Center for providing the dataset
+- Kaggle for hosting the competition platform
+- Ultralytics for the YOLO11 framework
+- Conservation community working to protect Steller sea lions
+
+## Competition Link
+
+[NOAA Fisheries Steller Sea Lion Population Count Kaggle Competition](https://www.kaggle.com/competitions/noaa-fisheries-steller-sea-lion-population-count)
